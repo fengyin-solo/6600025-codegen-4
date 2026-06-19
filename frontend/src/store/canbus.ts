@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import type {
   CanFrame,
   DbcMessage,
@@ -13,6 +13,80 @@ import { parseDbc, decodeCanFrame, DEFAULT_DBC_CONTENT } from '../utils/dbc-pars
 
 let frameIdCounter = 0;
 let sessionIdCounter = 0;
+
+const STORAGE_KEYS = {
+  sessions: 'canbus_sessions_v1',
+  compareMode: 'canbus_compare_mode_v1',
+  selectedA: 'canbus_selected_a_v1',
+  selectedB: 'canbus_selected_b_v1',
+  counters: 'canbus_counters_v1'
+};
+
+function mapToObj<K extends string | number, V>(map: Map<K, V>): [K, V][] {
+  return Array.from(map.entries());
+}
+
+function objToSignalsMap(
+  arr: [string, { name: string; data: { time: number; value: number }[] }][]
+): Map<string, { name: string; data: { time: number; value: number }[] }> {
+  return new Map(arr);
+}
+
+function objToSignalStatsMap(arr: [string, SignalStats][]): Map<string, SignalStats> {
+  return new Map(arr);
+}
+
+interface PersistedSession
+  extends Omit<CaptureSession, 'signals' | 'signalStats'> {
+  signals: [string, { name: string; data: { time: number; value: number }[] }][];
+  signalStats: [string, SignalStats][];
+}
+
+function serializeSessions(sessions: CaptureSession[]): string {
+  const persisted: PersistedSession[] = sessions.map(s => ({
+    ...s,
+    signals: mapToObj(s.signals),
+    signalStats: mapToObj(s.signalStats)
+  }));
+  return JSON.stringify(persisted);
+}
+
+function deserializeSessions(json: string): CaptureSession[] {
+  try {
+    const arr = JSON.parse(json) as PersistedSession[];
+    return arr.map(p => ({
+      ...p,
+      signals: objToSignalsMap(p.signals),
+      signalStats: objToSignalStatsMap(p.signalStats)
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function safeGetItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetItem(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // ignore quota / SSR errors
+  }
+}
+
+function safeRemoveItem(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
+}
 
 export const useCanBusStore = defineStore('canbus', () => {
   const frames = ref<CanFrame[]>([]);
@@ -28,6 +102,73 @@ export const useCanBusStore = defineStore('canbus', () => {
   const compareMode = ref(false);
   const selectedSessionA = ref<string | null>(null);
   const selectedSessionB = ref<string | null>(null);
+
+  const savedCountersRaw = safeGetItem(STORAGE_KEYS.counters);
+  if (savedCountersRaw) {
+    try {
+      const savedCounters = JSON.parse(savedCountersRaw);
+      if (typeof savedCounters.frameId === 'number') frameIdCounter = savedCounters.frameId;
+      if (typeof savedCounters.sessionId === 'number') sessionIdCounter = savedCounters.sessionId;
+    } catch {
+      // ignore
+    }
+  }
+
+  const savedSessions = safeGetItem(STORAGE_KEYS.sessions);
+  if (savedSessions) {
+    sessions.value = deserializeSessions(savedSessions);
+  }
+
+  const savedCompareMode = safeGetItem(STORAGE_KEYS.compareMode);
+  if (savedCompareMode !== null) {
+    compareMode.value = savedCompareMode === 'true';
+  }
+
+  const savedA = safeGetItem(STORAGE_KEYS.selectedA);
+  if (savedA !== null && savedA !== '') {
+    selectedSessionA.value = savedA;
+  }
+
+  const savedB = safeGetItem(STORAGE_KEYS.selectedB);
+  if (savedB !== null && savedB !== '') {
+    selectedSessionB.value = savedB;
+  }
+
+  function persistCounters() {
+    safeSetItem(STORAGE_KEYS.counters, JSON.stringify({
+      frameId: frameIdCounter,
+      sessionId: sessionIdCounter
+    }));
+  }
+
+  watch(
+    sessions,
+    (val) => {
+      safeSetItem(STORAGE_KEYS.sessions, serializeSessions(val));
+      persistCounters();
+    },
+    { deep: true }
+  );
+
+  watch(compareMode, (val) => {
+    safeSetItem(STORAGE_KEYS.compareMode, String(val));
+  });
+
+  watch(selectedSessionA, (val) => {
+    if (val === null) {
+      safeRemoveItem(STORAGE_KEYS.selectedA);
+    } else {
+      safeSetItem(STORAGE_KEYS.selectedA, val);
+    }
+  });
+
+  watch(selectedSessionB, (val) => {
+    if (val === null) {
+      safeRemoveItem(STORAGE_KEYS.selectedB);
+    } else {
+      safeSetItem(STORAGE_KEYS.selectedB, val);
+    }
+  });
 
   const busStats = ref<BusStats>({
     totalFrames: 0,
