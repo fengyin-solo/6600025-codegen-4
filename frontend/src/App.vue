@@ -2,6 +2,7 @@
 import { useCanBusStore } from './store/canbus';
 import FrameTable from './components/FrameTable.vue';
 import SignalChart from './components/SignalChart.vue';
+import ComparePanel from './components/ComparePanel.vue';
 
 const store = useCanBusStore();
 
@@ -20,6 +21,19 @@ function handleExport() {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+function handleSaveSession() {
+  if (store.frames.length === 0) {
+    alert('暂无数据可保存，请先开始捕获');
+    return;
+  }
+  const session = store.saveSession();
+  alert(`已保存会话: ${session.name} (${session.frames.length} 帧)`);
+}
+
+function handleToggleCompare() {
+  store.setCompareMode(!store.compareMode);
+}
 </script>
 
 <template>
@@ -37,12 +51,14 @@ function handleExport() {
 
       <div class="flex items-center gap-2">
         <button
+          v-if="!store.compareMode"
           @click="handleLoadDbc"
           class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm rounded transition-colors border border-gray-600"
         >
           加载DBC
         </button>
         <button
+          v-if="!store.compareMode"
           @click="store.isCapturing ? store.stopCapture() : store.startCapture()"
           class="px-3 py-1.5 text-sm rounded transition-colors font-medium"
           :class="store.isCapturing
@@ -52,48 +68,91 @@ function handleExport() {
           {{ store.isCapturing ? '停止捕获' : '开始捕获' }}
         </button>
         <button
+          v-if="!store.compareMode"
           @click="store.clearFrames()"
           class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm rounded transition-colors border border-gray-600"
         >
           清除
         </button>
         <button
+          v-if="!store.compareMode"
+          @click="handleSaveSession"
+          class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
+        >
+          保存会话
+          <span v-if="store.sessions.length > 0" class="ml-1 px-1.5 py-0.5 bg-blue-800 rounded text-xs">{{ store.sessions.length }}</span>
+        </button>
+        <button
+          v-if="!store.compareMode"
           @click="handleExport"
           class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm rounded transition-colors border border-gray-600"
         >
           导出CSV
+        </button>
+        <button
+          @click="handleToggleCompare"
+          class="px-3 py-1.5 text-sm rounded transition-colors font-medium"
+          :class="store.compareMode
+            ? 'bg-cyan-600 hover:bg-cyan-700 text-white'
+            : 'bg-purple-600 hover:bg-purple-700 text-white'"
+        >
+          {{ store.compareMode ? '返回采集' : '多车对比' }}
         </button>
       </div>
     </header>
 
     <!-- Main Area -->
     <main class="flex-1 flex overflow-hidden">
-      <!-- Left Panel: Frame Table (60%) -->
-      <div class="w-3/5 border-r border-gray-700 flex flex-col overflow-hidden">
-        <FrameTable />
-      </div>
+      <template v-if="store.compareMode">
+        <div class="flex-1 flex flex-col overflow-hidden">
+          <ComparePanel />
+        </div>
+      </template>
+      <template v-else>
+        <!-- Left Panel: Frame Table (60%) -->
+        <div class="w-3/5 border-r border-gray-700 flex flex-col overflow-hidden">
+          <FrameTable />
+        </div>
 
-      <!-- Right Panel: Signal Chart (40%) -->
-      <div class="w-2/5 flex flex-col overflow-hidden">
-        <SignalChart />
-      </div>
+        <!-- Right Panel: Signal Chart (40%) -->
+        <div class="w-2/5 flex flex-col overflow-hidden">
+          <SignalChart />
+        </div>
+      </template>
     </main>
 
     <!-- Status Bar -->
     <footer class="flex items-center justify-between px-6 py-1.5 bg-gray-800 border-t border-gray-700 text-xs shrink-0">
       <div class="flex items-center gap-4 text-gray-500">
-        <span>
-          <span :class="store.isCapturing ? 'text-green-400' : 'text-gray-500'">
-            ● {{ store.isCapturing ? '捕获中' : '已停止' }}
+        <template v-if="!store.compareMode">
+          <span>
+            <span :class="store.isCapturing ? 'text-green-400' : 'text-gray-500'">
+              ● {{ store.isCapturing ? '捕获中' : '已停止' }}
+            </span>
           </span>
-        </span>
-        <span>DBC消息: {{ store.dbcMessages.size }}</span>
+          <span>DBC消息: {{ store.dbcMessages.size }}</span>
+        </template>
+        <template v-else>
+          <span>
+            <span class="text-purple-400">● 对比模式</span>
+          </span>
+          <span>会话数: {{ store.sessions.length }}</span>
+          <span v-if="store.canCompare" class="text-cyan-400">
+            {{ store.sessionA?.name }} ↔ {{ store.sessionB?.name }}
+          </span>
+        </template>
       </div>
       <div class="flex items-center gap-4 text-gray-500">
-        <span>帧数: {{ store.busStats.totalFrames }}</span>
-        <span>RX: {{ store.busStats.rxCount }}</span>
-        <span>TX: {{ store.busStats.txCount }}</span>
-        <span>负载: {{ store.busLoadPercent }}%</span>
+        <template v-if="!store.compareMode">
+          <span>帧数: {{ store.busStats.totalFrames }}</span>
+          <span>RX: {{ store.busStats.rxCount }}</span>
+          <span>TX: {{ store.busStats.txCount }}</span>
+          <span>负载: {{ store.busLoadPercent }}%</span>
+        </template>
+        <template v-else-if="store.canCompare">
+          <span>异常: {{ store.anomalyDiffs.length }} 项</span>
+          <span>信号差异: {{ store.signalDiffs.filter(d => d.isSignificant).length }} 个显著</span>
+        </template>
       </div>
     </footer>
   </div>
